@@ -386,6 +386,9 @@ This integration provides full support for Home Assistant's native **Diagnostics
 
 ## Samsung port-8888 usage history (raw counters)
 
+For the full investigation, implementation status, test evidence and remaining
+work, see [the energy-consumption handoff](ENERGY_CONSUMPTION_HANDOFF.md).
+
 The raw connection engine reads `/files/usage.db` only when the device advertises
 that exact `EnergyConsumption.saveLocation`. It reuses the current token, shared
 socket and connection locks. Reads are authenticated GET requests; the reader
