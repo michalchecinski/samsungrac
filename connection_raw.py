@@ -26,7 +26,7 @@ from .const import (
 )
 from .exceptions import AuthError, CannotConnect
 from .helpers import format_placeholders
-from .protocol_8888 import Samsung8888Client
+from .protocol_8888 import Samsung8888Client, SamsungFileResponse
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -424,6 +424,18 @@ class ConnectionRaw8888(Connection):
         return await self._async_execute_request(
             method, url, data, headers, auth_ctx, _is_probe
         )
+
+    async def async_get_usage_file(self) -> SamsungFileResponse:
+        """Read only the advertised Samsung resource using current credentials.
+
+        Deliberately bypass embedded commands and token acquisition: this optional
+        read must never run a write or pairing flow or change climate availability.
+        """
+        auth_ctx = self._get_token_and_ids()
+        headers = self._format_request_headers(None, auth_ctx)
+        client = await self.async_get_client()
+        async with self.async_lock:
+            return await client.request_file("/files/usage.db", headers)
 
     async def _async_execute_request(
         self,

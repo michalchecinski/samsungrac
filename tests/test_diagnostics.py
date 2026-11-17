@@ -276,7 +276,7 @@ async def test_diagnostics_entry_fields_and_sensitive_redaction(mock_hass, mock_
 
 async def test_diagnostics_single_coordinator_full(mock_hass, mock_entry):
     """Test single coordinator diagnostics extraction with full telemetry and bootstrapping."""
-    coordinator = MagicMock(spec=SamsungClimateCoordinator)
+    coordinator = _mock_coordinator()
     coordinator.data = DummyCoordinatorData(power="on", target_temperature=23.5)
     coordinator.discovered_devices_count = 3
     coordinator.skipped_devices_count = 1
@@ -301,6 +301,10 @@ async def test_diagnostics_single_coordinator_full(mock_hass, mock_entry):
     assert result["last_poll_response"] == {"raw_voltage": 230}
     assert result["connection_diagnostics"] == {"ping_ms": 15}
     assert result["connection_telemetry"] == {"ping_ms": 15}
+    assert result["usage_history"] == {
+        "status": "not_requested", "http_status": None, "byte_count": None,
+        "sha256": None, "units_verified": False,
+    }
     assert result["raw_device_state"] == {
         "dev1": {"power": "on", "mac": "**REDACTED**"}
     }
@@ -315,7 +319,7 @@ async def test_diagnostics_single_coordinator_defaults_and_survivor_kill(
     mock_hass, mock_entry
 ):
     """Test single coordinator attribute defaults and kill Survivor 1 (line 220)."""
-    coordinator = MagicMock(spec=SamsungClimateCoordinator)
+    coordinator = _mock_coordinator()
     coordinator.data = None
     coordinator.devices = {}
     coordinator.controller = object()  # Bare object without optional attributes
@@ -342,7 +346,7 @@ async def test_diagnostics_single_coordinator_defaults_and_survivor_kill(
 
 async def test_diagnostics_multi_coordinator_full(mock_hass, mock_entry):
     """Test multi-coordinator dictionary diagnostics extraction and aggregate bootstrapping math."""
-    coord1 = MagicMock(spec=SamsungClimateCoordinator)
+    coord1 = _mock_coordinator()
     coord1.data = DummyCoordinatorData(power="on", target_temperature=21.0)
     coord1.discovered_devices_count = 3
     coord1.skipped_devices_count = 1
@@ -352,7 +356,7 @@ async def test_diagnostics_multi_coordinator_full(mock_hass, mock_entry):
     coord1.controller.last_poll_data = {"status": "ok"}
     coord1.controller.connection_diagnostics = {"ping_ms": 8}
 
-    coord2 = MagicMock(spec=SamsungClimateCoordinator)
+    coord2 = _mock_coordinator()
     coord2.data = None
     coord2.discovered_devices_count = 2
     coord2.skipped_devices_count = 3
@@ -395,7 +399,7 @@ async def test_diagnostics_multi_coordinator_defaults_and_survivor_kill(
     mock_hass, mock_entry
 ):
     """Test multi-coordinator default fallbacks and kill Survivor 2 (line 279)."""
-    coord = MagicMock(spec=SamsungClimateCoordinator)
+    coord = _mock_coordinator()
     coord.data = None
     coord.controller = object()
     del coord.discovered_devices_count
@@ -419,7 +423,7 @@ async def test_diagnostics_network_diagnostics_structure_and_reachability(
     mock_hass, mock_entry
 ):
     """Test network_diagnostics structure, probe support, and connection telemetry check."""
-    mock_coord = MagicMock(spec=SamsungClimateCoordinator)
+    mock_coord = _mock_coordinator()
     mock_coord.data = None
     mock_coord.devices = {}
     mock_coord.controller = MagicMock()
@@ -458,7 +462,7 @@ async def test_diagnostics_network_diagnostics_no_host(mock_hass):
     entry.domain = DOMAIN
     entry.unique_id = "uid_no_host"
 
-    mock_coord = MagicMock(spec=SamsungClimateCoordinator)
+    mock_coord = _mock_coordinator()
     mock_coord.data = None
     mock_coord.devices = {}
     mock_coord.controller = MagicMock(spec=[])
@@ -479,7 +483,7 @@ async def test_diagnostics_network_diagnostics_no_host(mock_hass):
 
 async def test_diagnostics_network_diagnostics_multi_coordinator(mock_hass, mock_entry):
     """CRITICAL SOLO KILLER: Test network_diagnostics with multi-coordinator dictionary setup."""
-    coord1 = MagicMock(spec=SamsungClimateCoordinator)
+    coord1 = _mock_coordinator()
     coord1.data = None
     coord1.devices = {}
     coord1.controller = MagicMock()
@@ -508,7 +512,7 @@ async def test_diagnostics_network_diagnostics_fallback_to_global_registry(
     mock_hass, mock_entry
 ):
     """Test fallback to get_last_network_diagnostic when controller has no network_reachability."""
-    mock_coord = MagicMock(spec=SamsungClimateCoordinator)
+    mock_coord = _mock_coordinator()
     mock_coord.data = None
     mock_coord.devices = {}
     mock_coord.controller = MagicMock(spec=[])
@@ -575,7 +579,7 @@ async def test_diagnostics_target_host_resolution_hierarchy(mock_hass, mock_entr
         # 5. Host in single coordinator controller.ip_address
         mock_entry.data = {}
         mock_entry.options = {}
-        single_coord = MagicMock(spec=SamsungClimateCoordinator)
+        single_coord = _mock_coordinator()
         single_coord.data = None
         single_coord.devices = {}
         single_coord.controller = MagicMock()
@@ -603,7 +607,7 @@ async def test_diagnostics_target_host_resolution_hierarchy(mock_hass, mock_entr
         mock_probe.assert_called_with("10.0.0.7", ping_timeout=1.0)
 
         # 8. Host in multi-coordinator dictionary (MIM-H03 indoor units) -> kills L301-311
-        multi_coord = MagicMock(spec=SamsungClimateCoordinator)
+        multi_coord = _mock_coordinator()
         multi_coord.data = None
         multi_coord.devices = {}
         multi_coord.controller = MagicMock()
@@ -667,3 +671,11 @@ async def test_diagnostics_deep_redaction_complex_compound(mock_hass, mock_entry
     assert result["entry"]["title"] == "Device **REDACTED**"
     assert result["entry"]["unique_id"] == "**REDACTED**"
     assert result["entry"]["options"]["note"] == "Contact **REDACTED** for help"
+
+
+def _mock_coordinator():
+    """Provide the optional history reader on coordinator test doubles."""
+    from custom_components.climate_ip.usage_history import UsageHistoryReader
+    coordinator = MagicMock(spec=SamsungClimateCoordinator)
+    coordinator.usage_history = UsageHistoryReader()
+    return coordinator

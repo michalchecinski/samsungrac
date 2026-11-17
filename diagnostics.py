@@ -217,6 +217,7 @@ async def async_get_config_entry_diagnostics(  # noqa: C901
     }
 
     if isinstance(entry_data, SamsungClimateCoordinator):
+        diagnostics_data["usage_history"] = entry_data.usage_history.diagnostics
         if entry_data.data:
             diagnostics_data["coordinator_data"] = asdict(entry_data.data)
         state_attrs = getattr(entry_data.controller, "state_attributes", None)
@@ -245,6 +246,9 @@ async def async_get_config_entry_diagnostics(  # noqa: C901
         for device_id, coordinator in entry_data.items():
             if isinstance(coordinator, SamsungClimateCoordinator):
                 coordinator_diag: dict[str, Any] = {}
+                coordinator_diag["usage_history"] = (
+                    coordinator.usage_history.diagnostics
+                )
 
                 state_attrs = getattr(coordinator.controller, "state_attributes", None)
                 if state_attrs is not None:

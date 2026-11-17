@@ -383,3 +383,74 @@ This integration provides full support for Home Assistant's native **Diagnostics
 * **License:** MIT License
 * **Maintainer:** Senior Home Assistant Core Integration Team
 * **Quality Standard:** Home Assistant Core 2026.x Gold Master Standard
+
+## Samsung port-8888 usage history (discovery support)
+
+Devices such as `TP6X_RAC_17K` advertise
+`EnergyConsumption.saveLocation: /files/usage.db`. The raw connection engine can
+now fetch this exact resource with the current token, shared socket and existing
+connection locks. Only authenticated **GET** requests are used; this optional
+reader does not execute embedded commands or initiate pairing.
+
+After a successful climate poll, a separate background task attempts the download
+at most once per 15 minutes, including failed attempts. This is a conservative
+request interval, **not a verified history update frequency**. Each attempt has a
+10-second request budget once the coordinator network lock is acquired, plus
+up to 2 seconds for socket cleanup after a failure. Climate
+state is published without awaiting the download. Commands share that lock and
+may wait for that request and cleanup budget while a download is active. Unloading cancels the task.
+
+Diagnostics include `usage_history`: the latest attempt's status, HTTP status
+when available, byte count and SHA-256 digest for a nonempty HTTP 200 body, and
+`units_verified: false`. They contain neither the file contents nor response
+headers. A failure clears metadata from the previous successful download;
+missing, empty, malformed, unauthorized and unsupported responses never become
+zero consumption and never invalidate climate state. Unsupported engines or
+unadvertised resources are not queried. The reader allows files up to 2 MiB and
+requires one valid `Content-Length`; unframed or transfer-encoded responses are
+rejected and the socket closed to prevent contamination of the next climate
+response. The existing text status reader retains its compatibility behavior.
+
+**No energy, runtime or raw-counter sensor is added yet.** Neither the actual
+file format nor a counter meaning is established. A byte-preserving transport is
+necessary for discovery; it is not evidence of kWh. The port-2878
+`AC_ADD2_USEDPOWER` scaling does not apply without port-8888 validation, and
+`UsagesDB_254` is not treated as a consumption value. Delayed history must not be
+presented as instantaneous watts.
+
+### Device evidence and remaining validation
+
+Read-only Home Assistant diagnostics on 17 November 2026 confirmed Climate IP
+10.0.1b10, the raw `samsung_8888` engine, `TP6X_RAC_17K` and the advertised usage
+path. The supplied evidence contains no usage-file response. The connected HA MCP
+redacts credentials and offers no authenticated AC file-download API; no direct
+AC request could be made. No Home Assistant configuration or installation was
+changed.
+
+Upstream [issue #10](https://github.com/ismaelrivas/samsungrac/issues/10) suggests
+fetching the file but does not establish its format or units. The scaling and
+runtime confirmations in [#5](https://github.com/ismaelrivas/samsungrac/issues/5)
+and [#6](https://github.com/ismaelrivas/samsungrac/issues/6) concern port 2878.
+
+To implement an energy sensor, the remaining work requires an authenticated
+read-only capture of response status, headers and original bytes; identification
+of encoding and schema; repeated captures during naturally occurring AC use;
+validation against labelled Samsung consumption or an independent electricity
+meter; and evidence of counter updates, rollover and resets. Until then no HA
+energy device class, unit or state class can be chosen responsibly. Do not reset
+counters or switch the AC on merely to collect evidence without authorization.
+
+`tests/fixtures/tp6x_device.txt` is the sanitized real status advertisement from
+the evidence bundle. Binary test samples are explicitly synthetic; they verify
+byte preservation and failure isolation, not a guessed database parser or energy
+scaling. Tests also verify that changed bytes are not interpreted as counter
+resets.
+
+Validation for this change (Python 3.14, Ruff 0.15.10): 34 new discovery/transport
+tests passed. The full suite reported 856 passed, one skipped (no reachable local
+IntesisBox emulator), and five failures importing the absent
+`custom_components.climate_ip_tools.emulator_intesisbox`. The same five failures
+were reproduced on an unchanged checkout of the starting commit. Ruff lint and
+format checks, YAML parsing, whitespace checks and release ZIP packaging passed.
+The package includes `usage_history.py` and excludes tests. No test establishes
+port-8888 energy scaling or reset behavior.

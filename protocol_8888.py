@@ -6,6 +6,7 @@ Supports Raw Sockets and SSL auto-negotiation (Legacy vs Modern).
 
 import asyncio
 import contextlib
+from dataclasses import dataclass
 import json
 import logging
 import re
@@ -36,6 +37,16 @@ STATUS_PATTERN = re.compile(r"^HTTP/\d\.\d\s+(?P<code>\d+)", re.IGNORECASE)
 READ_CHUNK_SIZE: Final = 8192
 FALLBACK_READ_TIMEOUT: Final = 5.0
 SOCKET_CLOSE_TIMEOUT: Final = 2.0
+MAX_FILE_BYTES: Final = 2 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class SamsungFileResponse:
+    """An HTTP response whose body has never been decoded as text."""
+
+    status: int
+    headers: tuple[str, ...]
+    body: bytes
 
 
 # AuthError and CannotConnect are imported from exceptions.py — do not redefine here.
@@ -387,6 +398,53 @@ class Samsung8888Client:
         headers: dict[str, str] | None = None,
     ) -> tuple[str | None, str | None]:
         """Send an HTTP request over the persistent SSL socket and return (body, error)."""
+        result = await self._request(method, path, body, headers)
+        assert isinstance(result, tuple)
+        return result
+
+    async def request_file(
+        self, path: str, headers: dict[str, str] | None = None
+    ) -> SamsungFileResponse:
+        """Read a file with the same socket and lock, without logging its contents."""
+        result = await self._request("GET", path, None, headers, file_response=True)
+        assert isinstance(result, SamsungFileResponse)
+        return result
+
+    async def _read_file_body(
+        self,
+        reader: asyncio.StreamReader,
+        content_length: int,
+        has_cl_header: bool,
+        headers: list[str],
+    ) -> bytes:
+        """Require explicit framing; never accept a timed-out partial file."""
+        transfer_encodings = [
+            line.split(":", 1)[1].strip().lower()
+            for line in headers
+            if line.lower().startswith("transfer-encoding:")
+        ]
+        lengths = [
+            line.split(":", 1)[1].strip()
+            for line in headers
+            if line.lower().startswith("content-length:")
+        ]
+        if transfer_encodings or not has_cl_header or lengths != [str(content_length)]:
+            raise CannotConnect("Unsupported usage-file HTTP framing")
+        if not 0 <= content_length <= MAX_FILE_BYTES:
+            raise CannotConnect("Usage file exceeds size limit")
+        async with asyncio.timeout(GLOBAL_HTTP_TIMEOUT):
+            return await reader.readexactly(content_length)
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None,
+        headers: dict[str, str] | None,
+        *,
+        file_response: bool = False,
+    ) -> tuple[str | None, str | None] | SamsungFileResponse:
+        """Dispatch text and byte requests through one authenticated socket lock."""
         async with self._lock:
             retried = False
             while True:
@@ -419,6 +477,20 @@ class Samsung8888Client:
                         headers_received,
                     ) = await self._read_response_headers(reader)
 
+                    if file_response:
+                        # Error bodies and headers may contain credentials. Do not log them.
+                        file_body = await self._read_file_body(
+                            reader,
+                            content_length,
+                            has_content_length_header,
+                            headers_received,
+                        )
+                        if status_code == 401:
+                            raise AuthError("401 Unauthorized")
+                        return SamsungFileResponse(
+                            status_code, tuple(headers_received), file_body
+                        )
+
                     resp_body = await self._read_response_body(
                         reader, content_length, has_content_length_header
                     )
@@ -445,8 +517,12 @@ class Samsung8888Client:
                     return resp_body, None  # noqa: TRY300
 
                 except CannotConnect:
-                    # Already closed by the inner handler; propagate directly.
+                    # A file framing failure must not leave bytes in the climate socket.
+                    await self.close()
                     raise
+                except TimeoutError as exc:
+                    await self.close()
+                    raise CannotConnect("Timeout reading file response") from exc
                 except (
                     ConnectionResetError,
                     BrokenPipeError,

@@ -56,6 +56,7 @@ from .const import (
 from .controller import ControllerInterface
 from .exceptions import AuthError, CannotConnect, InvalidHeaderError
 from .state import ClimateIPDeviceState
+from .usage_history import UsageHistoryReader
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,6 +82,8 @@ class SamsungClimateCoordinator(DataUpdateCoordinator[ClimateIPDeviceState]):
         self.devices = {}
         self.debouncer = PropertyDebouncer(self)
         self._global_network_lock = asyncio.Lock()
+        self.usage_history = UsageHistoryReader()
+        self._usage_task: asyncio.Task[None] | None = None
         self.config_entry = entry
 
         # Inject callbacks into the controller to avoid circular dependencies.
@@ -311,6 +314,7 @@ class SamsungClimateCoordinator(DataUpdateCoordinator[ClimateIPDeviceState]):
             async with self._global_network_lock:
                 async with asyncio.timeout(NETWORK_POLL_TIMEOUT):
                     await self.controller.async_get_status()  # pragma: no mutate
+            self._schedule_usage_read()
             return self._create_device_state()
         except InvalidHeaderError as err:
             if self.connection_method != CONN_METHOD_RAW:
@@ -373,6 +377,23 @@ class SamsungClimateCoordinator(DataUpdateCoordinator[ClimateIPDeviceState]):
             )  # pragma: no mutate
 
             raise UpdateFailed(f"Fatal error: {err}") from err  # pragma: no mutate
+
+    def _schedule_usage_read(self) -> None:
+        """Start a bounded, slower history read after a successful climate poll."""
+        if self._usage_task is not None and not self._usage_task.done():
+            return
+        connection = self.controller.connection
+        if self.usage_history.due(connection, self.controller.pure_device_state):
+            self._usage_task = self.config_entry.async_create_background_task(
+                self.hass,
+                self._async_read_usage(connection),
+                "Climate IP usage history",
+            )
+
+    async def _async_read_usage(self, connection: Any) -> None:
+        """Share the climate command lock without delaying its published state."""
+        async with self._global_network_lock:
+            await self.usage_history.async_read(connection)
 
     async def async_handle_push_update(
         self, new_data: dict[str, Any] | None = None
@@ -651,6 +672,12 @@ class SamsungClimateCoordinator(DataUpdateCoordinator[ClimateIPDeviceState]):
         )  # pragma: no mutate
 
         self.debouncer.cancel_all()
+        if self._usage_task is not None:
+            self._usage_task.cancel()
+            try:
+                await self._usage_task
+            except asyncio.CancelledError:
+                pass
         await super().async_shutdown()
 
         try:

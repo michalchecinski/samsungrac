@@ -1,0 +1,86 @@
+{
+  "Alarms": [
+    {
+      "alarmType": "Device",
+      "code": "FilterAlarm_OFF",
+      "id": "0",
+      "triggeredTime": "2026-11-17T17:22:29"
+    }
+  ],
+  "ConfigurationLink": {
+    "href": "/devices/0/configuration"
+  },
+  "Diagnosis": {
+    "diagnosisStart": "Ready"
+  },
+  "EnergyConsumption": {
+    "saveLocation": "/files/usage.db"
+  },
+  "InformationLink": {
+    "href": "/devices/0/information"
+  },
+  "Mode": {
+    "modes": [
+      "Cool"
+    ],
+    "options": [
+      "Comode_Off",
+      "Sleep_0",
+      "Autoclean_Off",
+      "Spi_Off",
+      "FilterCleanAlarm_0",
+      "OutdoorTemp_59",
+      "CoolCapa_35",
+      "WarmCapa_35",
+      "UsagesDB_254",
+      "FilterTime_1410",
+      "ExtendOptionCode_1",
+      "OptionCode_56506",
+      "UpdateAllow_NotAllowed",
+      "FilterAlarmTime_500",
+      "Function_15",
+      "Volume_Mute"
+    ],
+    "supportedModes": [
+      "Cool",
+      "Dry",
+      "Wind",
+      "Auto"
+    ]
+  },
+  "Operation": {
+    "power": "Off"
+  },
+  "Temperatures": [
+    {
+      "current": 21,
+      "desired": 24,
+      "id": "0",
+      "maximum": 30,
+      "minimum": 16,
+      "unit": "Celsius"
+    }
+  ],
+  "Wind": {
+    "direction": "Fix",
+    "maxSpeedLevel": "0",
+    "speedLevel": "0"
+  },
+  "connected": true,
+  "description": "TP6X_RAC_17K",
+  "id": "0",
+  "name": "RAC",
+  "resources": [
+    "Alarms",
+    "Configuration",
+    "Diagnosis",
+    "EnergyConsumption",
+    "Information",
+    "Mode",
+    "Operation",
+    "Temperatures",
+    "Wind"
+  ],
+  "type": "Air_Conditioner",
+  "uuid": "REDACTED"
+}

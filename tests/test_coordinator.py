@@ -361,6 +361,11 @@ def _make_bare_coordinator(
     coord.config_entry = entry if entry is not None else _StubEntry()  # type: ignore[assignment]
     coord.devices = {}
     coord._global_network_lock = asyncio.Lock()
+    from custom_components.climate_ip.usage_history import UsageHistoryReader
+    coord.usage_history = UsageHistoryReader()
+    coord._usage_task = None
+    coord.controller.connection = None
+    coord.controller.pure_device_state = {}
     coord.device_info = {"name": "Test AC"}
     coord.data = None  # type: ignore[assignment]
     coord.last_update_success = True
