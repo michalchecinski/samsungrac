@@ -302,6 +302,7 @@ async def test_diagnostics_single_coordinator_full(mock_hass, mock_entry):
     assert result["connection_diagnostics"] == {"ping_ms": 15}
     assert result["connection_telemetry"] == {"ping_ms": 15}
     assert result["usage_history"] == {
+        "latest_record": None,
         "status": "not_requested", "http_status": None, "byte_count": None,
         "sha256": None, "units_verified": False,
     }

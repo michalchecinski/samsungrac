@@ -487,6 +487,11 @@ class Samsung8888Client:
                         )
                         if status_code == 401:
                             raise AuthError("401 Unauthorized")
+                        if any(
+                            line.lower().replace(" ", "") == "connection:close"
+                            for line in headers_received
+                        ):
+                            await self.close()
                         return SamsungFileResponse(
                             status_code, tuple(headers_received), file_body
                         )

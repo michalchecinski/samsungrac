@@ -7,15 +7,18 @@ import logging
 
 from homeassistant import const
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import ClimateIPConfigEntry
+from .connection_raw import ConnectionRaw8888
 from .coordinator import SamsungClimateCoordinator
 from .entity import SamsungClimateEntity
 from .helpers import parse_entity_category
 from .properties import DeviceProperty, UniqueIdProperty
+from .usage_history import advertises_usage_file
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,7 +33,7 @@ async def async_setup_entry(
     """Set up the sensor entities from a config entry."""
     coordinator_data = entry.runtime_data
 
-    entities_to_add: list[ClimateIpSensor] = []
+    entities_to_add: list[ClimateIpSensor | UsageCounterSensor] = []
     coordinators: list[SamsungClimateCoordinator] = (
         list(coordinator_data.values())
         if isinstance(coordinator_data, dict)
@@ -39,6 +42,24 @@ async def async_setup_entry(
 
     for coordinator in coordinators:
         raw_device_state = coordinator.controller.device_state
+        if isinstance(
+            coordinator.controller.connection, ConnectionRaw8888
+        ) and advertises_usage_file(coordinator.controller.pure_device_state):
+            for key, name in (
+                ("power_usage", "Usage history power counter (raw)"),
+                ("running_time", "Usage history runtime counter (raw)"),
+            ):
+                entities_to_add.append(
+                    UsageCounterSensor(
+                        coordinator,
+                        SensorEntityDescription(
+                            key=key,
+                            name=name,
+                            entity_category=EntityCategory.DIAGNOSTIC,
+                            icon="mdi:counter",
+                        ),
+                    )
+                )
 
         for sensor_prop in coordinator.controller.sensors:
             if sensor_prop.is_valid(raw_device_state):
@@ -82,6 +103,49 @@ async def async_setup_entry(
             len(entities_to_add),
         )  # pragma: no mutate
         async_add_entities(entities_to_add)
+
+
+class UsageCounterSensor(SamsungClimateEntity, SensorEntity):
+    """An unscaled stored counter, excluded from energy statistics."""
+
+    def __init__(
+        self,
+        coordinator: SamsungClimateCoordinator,
+        description: SensorEntityDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = (
+            f"{coordinator.unique_id}_usage_history_{description.key}"
+        )
+
+    @property
+    def available(self) -> bool:
+        """A usage failure affects these sensors only."""
+        return (
+            self.coordinator.last_update_success
+            and self.coordinator.usage_history.snapshot is not None
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the latest saved value without scaling or reset compensation."""
+        snapshot = self.coordinator.usage_history.snapshot
+        return getattr(snapshot, self.entity_description.key) if snapshot else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | int | bool] | None:
+        """Keep the old history timestamp distinct from the download time."""
+        snapshot = self.coordinator.usage_history.snapshot
+        if snapshot is None:
+            return None
+        return {
+            "latest_record_date": snapshot.date,
+            "date_format": "YYYYMMDDHH",
+            "timezone_verified": False,
+            "units_verified": False,
+            "record_count": snapshot.record_count,
+        }
 
 
 class ClimateIpSensor(SamsungClimateEntity, SensorEntity):

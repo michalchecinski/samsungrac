@@ -392,8 +392,8 @@ class SamsungClimateCoordinator(DataUpdateCoordinator[ClimateIPDeviceState]):
 
     async def _async_read_usage(self, connection: Any) -> None:
         """Share the climate command lock without delaying its published state."""
-        async with self._global_network_lock:
-            await self.usage_history.async_read(connection)
+        await self.usage_history.async_read(connection, self._global_network_lock)
+        self.async_update_listeners()
 
     async def async_handle_push_update(
         self, new_data: dict[str, Any] | None = None

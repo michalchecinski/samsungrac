@@ -384,73 +384,102 @@ This integration provides full support for Home Assistant's native **Diagnostics
 * **Maintainer:** Senior Home Assistant Core Integration Team
 * **Quality Standard:** Home Assistant Core 2026.x Gold Master Standard
 
-## Samsung port-8888 usage history (discovery support)
+## Samsung port-8888 usage history (raw counters)
 
-Devices such as `TP6X_RAC_17K` advertise
-`EnergyConsumption.saveLocation: /files/usage.db`. The raw connection engine can
-now fetch this exact resource with the current token, shared socket and existing
-connection locks. Only authenticated **GET** requests are used; this optional
-reader does not execute embedded commands or initiate pairing.
+The raw connection engine reads `/files/usage.db` only when the device advertises
+that exact `EnergyConsumption.saveLocation`. It reuses the current token, shared
+socket and connection locks. Reads are authenticated GET requests; the reader
+does not execute embedded commands or initiate pairing.
 
-After a successful climate poll, a separate background task attempts the download
-at most once per 15 minutes, including failed attempts. This is a conservative
-request interval, **not a verified history update frequency**. Each attempt has a
-10-second request budget once the coordinator network lock is acquired, plus
-up to 2 seconds for socket cleanup after a failure. Climate
-state is published without awaiting the download. Commands share that lock and
-may wait for that request and cleanup budget while a download is active. Unloading cancels the task.
+Supported devices receive two diagnostic sensors:
 
-Diagnostics include `usage_history`: the latest attempt's status, HTTP status
-when available, byte count and SHA-256 digest for a nonempty HTTP 200 body, and
-`units_verified: false`. They contain neither the file contents nor response
-headers. A failure clears metadata from the previous successful download;
-missing, empty, malformed, unauthorized and unsupported responses never become
-zero consumption and never invalidate climate state. Unsupported engines or
-unadvertised resources are not queried. The reader allows files up to 2 MiB and
-requires one valid `Content-Length`; unframed or transfer-encoded responses are
-rejected and the socket closed to prevent contamination of the next climate
-response. The existing text status reader retains its compatibility behavior.
+- **Usage history power counter (raw)**: latest stored `power_usage` value.
+- **Usage history runtime counter (raw)**: latest stored `running_time` value.
 
-**No energy, runtime or raw-counter sensor is added yet.** Neither the actual
-file format nor a counter meaning is established. A byte-preserving transport is
-necessary for discovery; it is not evidence of kWh. The port-2878
-`AC_ADD2_USEDPOWER` scaling does not apply without port-8888 validation, and
-`UsagesDB_254` is not treated as a consumption value. Delayed history must not be
-presented as instantaneous watts.
+These values have **no verified units**. They have no HA device class, unit or
+state class and cannot be selected as energy consumption in the Energy dashboard.
+Neither `AC_ADD2_USEDPOWER` scaling from port 2878 nor the `UsagesDB_254` option
+is used. Counter decreases remain raw decreases; the integration does not invent
+reset offsets or accumulate them. The latest row's date is exposed as the original
+`YYYYMMDDHH` string with `timezone_verified: false`, plus the record count and
+`units_verified: false`. It is a history timestamp, not a live reading.
 
-### Device evidence and remaining validation
+### Verified device evidence
 
-Read-only Home Assistant diagnostics on 17 November 2026 confirmed Climate IP
-10.0.1b10, the raw `samsung_8888` engine, `TP6X_RAC_17K` and the advertised usage
-path. The supplied evidence contains no usage-file response. The connected HA MCP
-redacts credentials and offers no authenticated AC file-download API; no direct
-AC request could be made. No Home Assistant configuration or installation was
-changed.
+The supplied read-only capture from `TP6X_RAC_17K` on 17 November 2026 returned
+HTTP 200 with 25944 body bytes, Content-Length 25944 and Connection: close.
+Despite Content-Type application/json, the body is plain base64 text, not JSON.
+Decoding it yields a 19456-byte unencrypted SQLite database; an independent
+integrity check returned `ok`. The schema is:
 
+```sql
+CREATE TABLE power_usage_table (
+  date NUMERIC(12) primary key default 0,
+  power_usage NUMERIC(14) default 0,
+  running_time NUMERIC(14) default 0
+)
+```
+
+The 177 rows range from `(2026052415, 8817, 18390)` to
+`(2026111014, 9690, 19770)`. Neither counter decreases in this capture. The latest
+stored row predates the download by seven days. This establishes neither update
+frequency nor reset behavior, electrical-energy units, runtime units or timezone.
+The schema has no unit labels. Raw counters are the supported functionality until
+those meanings are validated by device-specific documentation, a labelled Samsung
+reading or independent metering. Delayed history is never presented as watts.
+
+The original response was decoded and compared byte for byte with the supplied
+`usage.db`. No direct AC requests or Home Assistant configuration, installation,
+logging, restart or control changes were made while implementing this support.
 Upstream [issue #10](https://github.com/ismaelrivas/samsungrac/issues/10) suggests
-fetching the file but does not establish its format or units. The scaling and
-runtime confirmations in [#5](https://github.com/ismaelrivas/samsungrac/issues/5)
-and [#6](https://github.com/ismaelrivas/samsungrac/issues/6) concern port 2878.
+fetching the file without establishing its format or units. The confirmations in
+[#5](https://github.com/ismaelrivas/samsungrac/issues/5) and
+[#6](https://github.com/ismaelrivas/samsungrac/issues/6) concern port 2878.
 
-To implement an energy sensor, the remaining work requires an authenticated
-read-only capture of response status, headers and original bytes; identification
-of encoding and schema; repeated captures during naturally occurring AC use;
-validation against labelled Samsung consumption or an independent electricity
-meter; and evidence of counter updates, rollover and resets. Until then no HA
-energy device class, unit or state class can be chosen responsibly. Do not reset
-counters or switch the AC on merely to collect evidence without authorization.
+### Polling and failure handling
 
-`tests/fixtures/tp6x_device.txt` is the sanitized real status advertisement from
-the evidence bundle. Binary test samples are explicitly synthetic; they verify
-byte preservation and failure isolation, not a guessed database parser or energy
-scaling. Tests also verify that changed bytes are not interpreted as counter
-resets.
+After a successful climate poll, a background task reads history at most once per
+15 minutes, including failed attempts. This is a conservative request policy,
+not a measured device update interval. The network request has a 10-second budget
+once the coordinator lock is acquired, plus up to 2 seconds for socket cleanup.
+Climate state is published without awaiting it. Commands can wait for that request
+and cleanup budget. Parsing runs in a worker thread after releasing the network
+lock; the database is deserialized in memory and inspected with query-only mode,
+trusted schema disabled, and bounded SQL work and row count. No file is written.
+Unloading cancels the background read.
 
-Validation for this change (Python 3.14, Ruff 0.15.10): 34 new discovery/transport
-tests passed. The full suite reported 856 passed, one skipped (no reachable local
-IntesisBox emulator), and five failures importing the absent
-`custom_components.climate_ip_tools.emulator_intesisbox`. The same five failures
-were reproduced on an unchanged checkout of the starting commit. Ruff lint and
-format checks, YAML parsing, whitespace checks and release ZIP packaging passed.
-The package includes `usage_history.py` and excludes tests. No test establishes
-port-8888 energy scaling or reset behavior.
+Only plain base64 SQLite with the observed table schema is parsed; unsupported
+formats and schema variants are rejected. Responses require one valid
+Content-Length, have a 2 MiB limit, and cannot be transfer-encoded or unframed.
+Malformed framing closes the shared socket so the next climate response remains
+usable. Connection: close is honored. Empty, missing, malformed, unauthorized or
+unsupported history clears the raw sensors to unavailable without invalidating
+climate state or reporting fabricated zero. An empty table provides no counters.
+
+Diagnostics contain the latest attempt's status, HTTP status when available,
+byte count and SHA-256 digest for successful parsing, plus the latest raw record.
+Neither response headers, the full database nor credentials are exposed.
+
+### Validation fixtures
+
+`tests/fixtures/tp6x_device.txt` is the sanitized real status advertisement.
+`tests/fixtures/tp6x_usage_base64.txt` is rebuilt from the captured schema and all
+177 real rows, removing unused pages and retaining no device identifiers or
+credentials. Other binary, reset and malformed samples are explicitly synthetic.
+Tests verify real parsing without scaling, decreases without reset compensation,
+unknown formats and invalid rows, missing/empty history, throttling, byte framing,
+connection-close handling, failure isolation and raw sensor metadata/availability.
+No test claims verified energy units or device reset behavior.
+
+Public code search also found the same database structure in
+[Samsung Washer Local](https://github.com/perseus177/ha-samsung-washer-local/blob/b75ef1ee561de4426d2f150c81ce786169df2b3b/custom_components/samsung_washer_local/api.py).
+That implementation explicitly leaves its counter unit unverified; its washing
+machine observations do not establish the units for this AC.
+
+Validation (Python 3.14, Ruff 0.15.10): all 55 usage discovery/parser/transport and
+raw sensor tests passed; 126 tests passed across the affected platforms and
+coordinator/diagnostic modules. The full suite reported 877 passed, one skipped
+(no reachable local IntesisBox emulator), and the same five failures importing
+the absent `custom_components.climate_ip_tools.emulator_intesisbox` previously
+reproduced on the unchanged baseline. Ruff lint/format, YAML, whitespace and
+release ZIP checks passed. The ZIP includes the parser and excludes tests.
